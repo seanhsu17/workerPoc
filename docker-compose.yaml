@@ -30,3 +30,22 @@ services:
       ME_CONFIG_MONGODB_ADMINUSERNAME: root
       ME_CONFIG_MONGODB_ADMINPASSWORD: example
       ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
+
+  etcd:
+    image: "17media/etcd-alpine:v3.5.1-b"
+    environment:
+      ETCDCTL_API: "3"
+      ENVID: "dev"
+      # hint: this the arg for the script to pick app for seeding v3 data
+      V3_APP_LIST: "discovery"
+    ports:
+      - "12379:2379"
+      - "12380:2380"
+      - "14001:4001"
+
+  etcdkeeper:
+    image: "17media/etcdkeeper:v0.7.4-a"
+    ports:
+      - "12378:2378"
+    depends_on:
+      - etcd

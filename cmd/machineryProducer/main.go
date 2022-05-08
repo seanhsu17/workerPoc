@@ -3,10 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"cloud.google.com/go/pubsub"
 	"github.com/RichardKnop/machinery/v2"
 	mongoBackend "github.com/RichardKnop/machinery/v2/backends/mongo"
+	pubsubBroker "github.com/RichardKnop/machinery/v2/brokers/gcppubsub"
+	brokerIface "github.com/RichardKnop/machinery/v2/brokers/iface"
 	redisBroker "github.com/RichardKnop/machinery/v2/brokers/redis"
+
+	//redisBroker "github.com/RichardKnop/machinery/v2/brokers/redis"
 	machineryConfig "github.com/RichardKnop/machinery/v2/config"
 	redisLock "github.com/RichardKnop/machinery/v2/locks/redis"
 	"github.com/RichardKnop/machinery/v2/log"
@@ -15,11 +21,46 @@ import (
 	"github.com/opentracing/opentracing-go"
 	opentracinglog "github.com/opentracing/opentracing-go/log"
 
-	"github.com/seanhsu17/workerPoc/internal/handler/task"
+	"github.com/seanhsu17/workerPoc/internal/handler/math/task"
 )
 
 const redisAddr = "127.0.0.1:6379"
 const mongoAddr = "mongodb://root:example@localhost:27017/taskresults?authSource=admin"
+
+func initPubsub(cnf *machineryConfig.Config) brokerIface.Broker {
+	project := "test"
+	pubsubClient, err := pubsub.NewClient(
+		context.Background(),
+		project,
+	)
+	defer pubsubClient.Close()
+	if err != nil {
+		log.ERROR.Println(err)
+	}
+	topic := "machinery_tasks"
+	subscription := "testSub"
+	_, err = pubsubClient.CreateTopic(context.Background(), topic)
+	if err != nil {
+		log.ERROR.Println(err)
+	}
+	_, err = pubsubClient.CreateSubscription(context.Background(), subscription,
+		pubsub.SubscriptionConfig{
+			Topic:            pubsubClient.Topic(topic),
+			AckDeadline:      10 * time.Second,
+			ExpirationPolicy: 25 * time.Hour,
+		},
+	)
+	if err != nil {
+		log.ERROR.Println(err)
+	}
+
+	broker, _ := pubsubBroker.New(cnf, project, subscription)
+	return broker
+}
+
+func initRedis(cnf *machineryConfig.Config) brokerIface.Broker {
+	return redisBroker.New(cnf, redisAddr, "", "", 0)
+}
 
 func main() {
 	cnf := machineryConfig.Config{
@@ -36,10 +77,9 @@ func main() {
 			DelayedTasksPollPeriod: 500,
 		},
 	}
-	broker := redisBroker.NewGR(&cnf, []string{redisAddr}, 0)
 	backend, err := mongoBackend.New(&cnf)
 	lock := redisLock.New(&cnf, []string{redisAddr}, 0, 3)
-	server := machinery.NewServer(&cnf, broker, backend, lock)
+	server := machinery.NewServer(&cnf, initRedis(&cnf), backend, lock)
 
 	span, ctx := opentracing.StartSpanFromContext(context.Background(), "send")
 	defer span.Finish()
@@ -56,12 +96,8 @@ func main() {
 		Name: task.AddTask,
 		Args: []tasks.Arg{
 			{
-				Type:  "int",
-				Value: 1,
-			},
-			{
-				Type:  "int",
-				Value: 1,
+				Type:  "[]int",
+				Value: []int{1, 2},
 			},
 		},
 	}
